@@ -1,10 +1,6 @@
 // current_controller.hpp
-// Dual-axis (d/q) current controller with optional back-EMF decoupling feedforward.
-// Voltage output is limited as a vector (sqrt(vd^2 + vq^2) <= v_lim) rather than
-// independently per axis, preserving the direction of the voltage request.
-//
-// Gains are calculated by tune_gains.py using pole-zero cancellation:
-//   kp = L * omega_cc,   ki = Rs * omega_cc
+// Controls the d and q axis currents using two PI controllers.
+// Also adds a feedforward voltage to cancel out motor back-EMF.
 
 #pragma once
 #include <cmath>
@@ -12,53 +8,64 @@
 
 namespace foc {
 
-// Set to 1.0f for full SVPWM range, or 0.95f to keep a headroom margin.
-static constexpr float kVoltageClampFactor = 1.0f;
-
 class CurrentController {
 public:
+
+    // Controller settings
     struct Params {
-        float kp_d, ki_d;
-        float kp_q, ki_q;
-        float Ld, Lq, psi_f;
-        float v_max;
+        float kp_d, ki_d;   // PI gains for the d-axis
+        float kp_q, ki_q;   // PI gains for the q-axis
+        float Ld, Lq;       // motor inductances 
+        float psi_f;        // motor flux linkage
+        float v_max;        // maximum voltage we're allowed to output
     };
 
-    explicit CurrentController(const Params& p)
-        : p_(p),
-          v_lim_(p.v_max * kVoltageClampFactor),
-          pi_d_(p.kp_d, p.ki_d, -v_lim_, v_lim_),
-          pi_q_(p.kp_q, p.ki_q, -v_lim_, v_lim_) {}
+    // Set up the controller with the given parameters
+    CurrentController(Params p) {
+        params = p;
+        vLimit = p.v_max * 0.95;
 
+        // Set up each PI controller with its gains and voltage limits
+        pi_d = PIController(p.kp_d, p.ki_d, -vLimit, vLimit);
+        pi_q = PIController(p.kp_q, p.ki_q, -vLimit, vLimit);
+    }
+
+    // Run one step: given target and actual d/q currents, output the voltages to apply
     void step(float id_ref, float iq_ref,
               float id,     float iq,
-              float omega_e, float dt,
+              float omega, float dt,
               float& vd_out, float& vq_out)
     {
-        // ── Decoupling feedforward ────────────────────────────────────────────
-        const float ff_d = -omega_e * p_.Lq * iq;              // d-axis: cross-coupling
-        const float ff_q =  omega_e * (p_.Ld * id + p_.psi_f); // q-axis: cross-coupling + back-EMF
-        //const float ff_d = 0.0f;
-        //const float ff_q = 0.0f;
+        // Calculate feedforward voltages to cancel out the motor's back-EMF.
+        // Without this, the PI controllers would have to fight against it alone.
+        float ff_d = -omega * params.Lq * iq;
+        float ff_q =  omega * (params.Ld * id + params.psi_f);
 
-        vd_out = pi_d_.step(id_ref - id, dt) + ff_d;
-        vq_out = pi_q_.step(iq_ref - iq, dt) + ff_q;
+        // Run the PI controllers on the error, then add the feedforward
+        vd_out = pi_d.step(id_ref - id, dt) + ff_d;
+        vq_out = pi_q.step(iq_ref - iq, dt) + ff_q;
 
-        // ── Voltage vector limiting ───────────────────────────────────────────
-        const float v_mag = std::sqrt(vd_out * vd_out + vq_out * vq_out);
-        if (v_mag > v_lim_) {
-            const float scale = v_lim_ / v_mag;
+        // If the total voltage vector is too large, scale both axes down together.
+        // Scales together so the direction stays the same.
+        float magnitude = std::sqrt(vd_out * vd_out + vq_out * vq_out);
+        if (magnitude > vLimit) {
+            float scale = vLimit / magnitude;
             vd_out *= scale;
             vq_out *= scale;
         }
     }
 
-    void reset() { pi_d_.reset(); pi_q_.reset(); }
+    // Reset both PI controllers back to zero
+    void reset() {
+        pi_d.reset();
+        pi_q.reset();
+    }
 
 private:
-    const Params p_;
-    const float  v_lim_;
-    PIController pi_d_, pi_q_;
+    Params params;      // copy of all the motor/controller settings
+    float vLimit;       // maximum output voltage magnitude
+    PIController pi_d;  // PI controller for the d-axis
+    PIController pi_q;  // PI controller for the q-axis
 };
 
-} 
+}

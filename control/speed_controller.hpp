@@ -1,8 +1,5 @@
 // speed_controller.hpp
-// Outer mechanical speed loop. Outputs iq_ref; id_ref is always zero (MTPA).
-//
-// Gains are calculated by tune_gains.py using pole-zero cancellation:
-//   kp = J * omega_sc / Kt,   ki = B * omega_sc / Kt
+// Outer speed loop: takes a target speed and outputs how much q-axis current to request
 
 #pragma once
 #include "pi_controller.hpp"
@@ -11,21 +8,32 @@ namespace foc {
 
 class SpeedController {
 public:
+
+    // All the settings needed to set up the speed controller
     struct Params {
-        float kp, ki, iq_max;
+        float kp;      // proportional gain
+        float ki;      // integral gain
+        float iq_max;  // maximum current we're allowed to request
     };
 
-    explicit SpeedController(const Params& p)
-        : pi_(p.kp, p.ki, -p.iq_max, p.iq_max) {}
-
-    float step(float omega_ref, float omega_m, float dt) {
-        return pi_.step(omega_ref - omega_m, dt);
+    // Set up the controller with the given parameters
+    SpeedController(Params p) {
+        pi = PIController(p.kp, p.ki, -p.iq_max, p.iq_max);
     }
 
-    void reset() { pi_.reset(); }
+    // Run one step: given target and actual speed, returns the q-axis current to request
+    float step(float targetSpeed, float actualSpeed, float dt) {
+        float error = targetSpeed - actualSpeed;
+        return pi.step(error, dt);
+    }
+
+    // Reset the PI controller back to zero
+    void reset() {
+        pi.reset();
+    }
 
 private:
-    PIController pi_;
+    PIController pi;
 };
 
-} 
+}

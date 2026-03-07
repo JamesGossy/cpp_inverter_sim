@@ -1,7 +1,5 @@
 // pi_controller.hpp
-// Generic discrete PI controller with output clamping and integrator anti-windup.
-// Anti-windup strategy: clamp the integrator state to [out_min, out_max] each step,
-// so the integral cannot wind beyond what the output limiter will ever allow.
+// A PI controller: calculates a correction based on how far off we are (error)
 
 #pragma once
 
@@ -9,34 +7,67 @@ namespace foc {
 
 class PIController {
 public:
-    PIController() = default;
 
-    PIController(float kp, float ki, float out_min, float out_max)
-        : kp_(kp), ki_(ki), out_min_(out_min), out_max_(out_max) {}
-
-    // Advance by one time step. Returns the clamped controller output.
-    float step(float error, float dt) {
-        integral_ += ki_ * error * dt;
-        integral_  = clamp(integral_, out_min_, out_max_);   // anti-windup
-        return clamp(kp_ * error + integral_, out_min_, out_max_);
+    // Set up the controller with gains and output limits
+    PIController(float kp, float ki, float outMin, float outMax) {
+        this->kp = kp;
+        this->ki = ki;
+        this->outMin = outMin;
+        this->outMax = outMax;
     }
 
-    void  reset(float integral0 = 0.0f) { integral_ = integral0; }
-    float integral() const { return integral_; }
+    // Default constructor with no arguments
+    PIController() {}
 
-    void set_gains (float kp, float ki)              { kp_ = kp; ki_ = ki; }
-    void set_limits(float out_min, float out_max)    { out_min_ = out_min; out_max_ = out_max; }
+    // Run one step of the controller. Returns how much to correct by.
+    float step(float error, float dt) {
+
+        // Add to the running total (integral) over time
+        integral += ki * error * dt;
+
+        // Clamp the integral so it doesn't grow out of control (anti-windup)
+        integral = clamp(integral, outMin, outMax);
+
+        // Add the proportional part and clamp the final output too
+        float output = kp * error + integral;
+        return clamp(output, outMin, outMax);
+    }
+
+    // Reset the integral back to zero 
+    void reset(float startValue = 0.0f) {
+        integral = startValue;
+    }
+
+    // Get the current integral value
+    float getIntegral() {
+        return integral;
+    }
+
+    // Update the P and I gains
+    void setGains(float newKp, float newKi) {
+        kp = newKp;
+        ki = newKi;
+    }
+
+    // Update the output limits
+    void setLimits(float newMin, float newMax) {
+        outMin = newMin;
+        outMax = newMax;
+    }
 
 private:
-    float kp_      {0.0f};
-    float ki_      {0.0f};
-    float integral_{0.0f};
-    float out_min_ {-1e9f};
-    float out_max_ { 1e9f};
+    float kp       = 0.0f;    // proportional gain
+    float ki       = 0.0f;    // integral gain
+    float integral = 0.0f;    // running total of error over time
+    float outMin   = -1e9f;   // minimum allowed output
+    float outMax   =  1e9f;   // maximum allowed output
 
-    static float clamp(float x, float lo, float hi) {
-        return x < lo ? lo : (x > hi ? hi : x);
+    // Keeps a value between lo and hi
+    float clamp(float x, float lo, float hi) {
+        if (x < lo) return lo;
+        if (x > hi) return hi;
+        return x;
     }
 };
 
-} 
+}
