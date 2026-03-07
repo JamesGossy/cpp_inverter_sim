@@ -1,2 +1,1 @@
 C++: g++ -std=c++17 -O2 -I. -o sim main.cpp sim/pmsm.cpp; .\sim
-Python: python -u "c:\Users\hames\OneDrive\Documents\Engineering\Projects\cpp_inverter_sim\visualise_data.py"

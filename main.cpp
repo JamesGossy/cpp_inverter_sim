@@ -1,127 +1,182 @@
 // main.cpp
-// Top-level simulation. Runs an open-loop V/f drive feeding a PMSM model.
-// Logs results to results/sim_data.csv for plotting in visualise_data.py.
-
+// Closed-loop FOC simulation feeding a PMSM model.
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 
-#include "control/angle_generator.hpp"
+#include "control/current_controller.hpp"
 #include "control/modulation.hpp"
+#include "control/speed_controller.hpp"
 #include "control/transforms.hpp"
 #include "sim/inverter.hpp"
 #include "sim/pmsm.hpp"
 
 int main() {
-    // ---- Simulation parameters ----
-    const double dt    = 1e-6;   // Time step (s)
-    const double t_end = 0.20;   // Total run time (s)
+    // ── Simulation parameters ────────────────────────────────────────────────
+    constexpr double dt    = 1e-6;
+    constexpr double t_end = 0.20;
 
-    // ---- Inverter parameters ----
-    const double Vdc  = 480.0;   // DC bus voltage (V)
-    const double f_sw = 20000.0; // Switching frequency (Hz)
+    // ── Computational delay ──────────────────────────────────────────────────
+    // Models the one PWM period delay between measurement and voltage application
+    // Set to 0 to disable.
+    constexpr int kDelaySteps = 50;  // 50 µs = 1 switching period at 20 kHz
 
-    // Maximum phase voltage achievable with SVPWM: Vdc / √3
-    const double v_phase_max = Vdc * foc::kInvSqrt3;
+    std::array<float, kDelaySteps + 1> delay_alpha{}, delay_beta{};
+    int delay_head = 0;
 
-    foc::AngleGenerator  ang;
-    foc::SVPWMModulator  mod((float)Vdc);
-    sim::inverter inv(Vdc);
-
-    // ---- Motor parameters ----
+    // ── Motor parameters ─────────────────────────────────────────────────────
     sim::PMSM::Params mp;
     mp.pole_pairs = 5;
-    mp.Rs         = 0.138;    // Stator resistance (Ω)
-    mp.Ld         = 259e-6;  // d-axis inductance (H)
-    mp.Lq         = 275e-6;  // q-axis inductance (H)
-    mp.psi_f      = 0.051;   // PM flux linkage (Wb)
-    mp.J          = 2.0e-4;  // Rotor inertia (kg·m²)
-    mp.B          = 2.0e-4;  // Viscous friction (N·m·s)
-    mp.T_load     = 0.1;     // Constant load torque (N·m)
+    mp.Rs         = 0.138;
+    mp.Ld         = 259e-6;
+    mp.Lq         = 275e-6;
+    mp.psi_f      = 0.051;
+    mp.J          = 2.0e-4;
+    mp.B          = 2.0e-4;
+    mp.T_load     = 0.1;
 
     sim::PMSM motor(mp);
 
-    // ---- Open-loop V/f command ----
-    // Frequency ramps from 0 → f_e_target over 0.1 s, then holds.
-    const double f_e_target = 200.0;  // Target electrical frequency (Hz)
+    // ── Inverter ─────────────────────────────────────────────────────────────
+    constexpr double Vdc = 480.0;
+    sim::inverter       inv(Vdc);
+    foc::SVPWMModulator mod(static_cast<float>(Vdc));
 
-    // ---- Logging ----
+    // ── Speed reference profile ──────────────────────────────────────────────
+    constexpr double f_e_target     = 200.0;
+    const     double omega_m_target = 2.0 * foc::kPi * f_e_target / mp.pole_pairs;
+
+    // ── MTPA current angle ───────────────────────────────────────────────────
+    // Advances the current vector off the q-axis into the -d direction.
+    // id_ref = -|i| * sin(delta),   iq_ref = |i| * cos(delta)
+    constexpr float kMtpaDeg      = 0.0f;
+    constexpr float kMtpaRad      = kMtpaDeg * static_cast<float>(foc::kPi) / 180.0f;
+    const     float kMtpaSinDelta = std::sin(kMtpaRad);
+    const     float kMtpaCosDelta = std::cos(kMtpaRad);
+
+    // ── Speed controller ─────────────────────────────────────────────────────
+    // iq_max is the total current vector magnitude limit (A).
+    foc::SpeedController::Params sc;
+    sc.kp     = 0.3f;
+    sc.ki     = 0.025f;
+    sc.iq_max = 20.0f;
+
+    foc::SpeedController speed_ctrl(sc);
+
+    // ── Current controller ───────────────────────────────────────────────────
+    foc::CurrentController::Params cc;
+    cc.kp_d  = 0.5f;
+    cc.ki_d  = 300.0f;
+    cc.kp_q  = 0.5f;
+    cc.ki_q  = 300.0f;
+    cc.Ld    = static_cast<float>(mp.Ld);
+    cc.Lq    = static_cast<float>(mp.Lq);
+    cc.psi_f = static_cast<float>(mp.psi_f);
+    cc.v_max = static_cast<float>(Vdc * foc::kInvSqrt3);
+
+    foc::CurrentController current_ctrl(cc);
+
+    // ── Logging ──────────────────────────────────────────────────────────────
     std::filesystem::create_directories("results");
     std::ofstream csv("results/sim_data.csv");
     if (!csv) { std::cerr << "Failed to open results/sim_data.csv\n"; return 1; }
 
-    csv << "t,f_e_cmd_hz,theta_ctrl,theta_e_true,omega_m,"
+    csv << "t,omega_m_ref,omega_m,theta_e_true,"
            "va,vb,vc,duty_a,duty_b,duty_c,"
-           "ia,ib,ic,ialpha,ibeta,id_true,iq_true,Te\n"
+           "ia,ib,ic,ialpha,ibeta,"
+           "id_ref,id_true,iq_ref,iq_true,Te\n"
         << std::fixed << std::setprecision(8);
 
-    const int log_every = 20;  // Write every Nth step to keep CSV size manageable
+    constexpr int log_every = 20;
     int log_count = 0;
 
-    // ---- Main loop ----
+    // ── Main loop ─────────────────────────────────────────────────────────────
     for (double t = 0.0; t <= t_end; t += dt) {
 
-        // Ramp electrical frequency 0 → f_e_target over the first 0.1 s
-        const double f_e_cmd   = (t < 0.10) ? f_e_target * (t / 0.10) : f_e_target;
-        const double omega_cmd = 2.0 * foc::kPi * f_e_cmd;
+        const double omega_m_ref = (t < 0.10)
+            ? omega_m_target * (t / 0.10)
+            : omega_m_target;
 
-        // Scale voltage with frequency (constant V/f) to avoid saturating the motor at low speed
-        const double v_mag = v_phase_max; //v_phase_max * (f_e_cmd / f_e_target);
+        // Feedback
+        const float theta_e = static_cast<float>(motor.theta_e());
+        const float omega_m = static_cast<float>(motor.omega_m());
+        const float omega_e = static_cast<float>(mp.pole_pairs * motor.omega_m());
 
-        // Step the open-loop stator angle integrator
-        ang.step((float)omega_cmd, (float)dt);
-        const float theta = ang.theta();
+        double ia_d, ib_d;
+        motor.currents_alphabeta(ia_d, ib_d);
+        const float i_alpha = static_cast<float>(ia_d);
+        const float i_beta  = static_cast<float>(ib_d);
 
-        // Compute rotating voltage vector in alpha/beta frame
-        const float v_alpha_ref = (float)(v_mag * std::cos(theta));
-        const float v_beta_ref  = (float)(v_mag * std::sin(theta));
+        // Park transform → dq currents
+        float id_meas, iq_meas;
+        foc::park(i_alpha, i_beta, theta_e, id_meas, iq_meas);
 
-        // alpha/beta -> abc 
+        // Speed loop → current magnitude → MTPA decomposition into id/iq refs
+        const float i_mag  = speed_ctrl.step(static_cast<float>(omega_m_ref), omega_m, static_cast<float>(dt));
+        const float id_ref = -i_mag * kMtpaSinDelta;
+        const float iq_ref =  i_mag * kMtpaCosDelta;
+
+        // Current loops → dq voltages
+        float vd, vq;
+        current_ctrl.step(id_ref, iq_ref, id_meas, iq_meas, omega_e, static_cast<float>(dt), vd, vq);
+
+        // Inverse Park → alpha/beta voltage references
+        float v_alpha_ref, v_beta_ref;
+        foc::inv_park(vd, vq, theta_e, v_alpha_ref, v_beta_ref);
+
+        // ── Computational delay ───────────────────────────────────────────────
+        float v_alpha_delayed, v_beta_delayed;
+        if constexpr (kDelaySteps > 0) {
+            delay_alpha[delay_head] = v_alpha_ref;
+            delay_beta [delay_head] = v_beta_ref;
+            const int tail = (delay_head + 1) % (kDelaySteps + 1);
+            v_alpha_delayed = delay_alpha[tail];
+            v_beta_delayed  = delay_beta [tail];
+            delay_head = tail;
+        } else {
+            v_alpha_delayed = v_alpha_ref;
+            v_beta_delayed  = v_beta_ref;
+        }
+
+        // alpha/beta → abc → duty cycles → phase voltages
         float va_ref, vb_ref, vc_ref;
-        foc::inv_clarke(v_alpha_ref, v_beta_ref, va_ref, vb_ref, vc_ref);
+        foc::inv_clarke(v_alpha_delayed, v_beta_delayed, va_ref, vb_ref, vc_ref);
 
-        // abc voltage references -> PWM duty cycles
         float duty_a, duty_b, duty_c;
         mod.step(va_ref, vb_ref, vc_ref, duty_a, duty_b, duty_c);
 
-        // Duty cycles -> phase-to-neutral voltages
         double va, vb, vc;
-        inv.step((double)duty_a, (double)duty_b, (double)duty_c, va, vb, vc);
+        inv.step(static_cast<double>(duty_a),
+                 static_cast<double>(duty_b),
+                 static_cast<double>(duty_c), va, vb, vc);
 
-        // Phase voltages -> alpha/beta for the motor model
-        float v_alpha_f, v_beta_f;
-        foc::clarke((float)va, (float)vb, v_alpha_f, v_beta_f);
-        const double v_alpha = v_alpha_f;
-        const double v_beta  = v_beta_f;
+        float v_alpha_m, v_beta_m;
+        foc::clarke(static_cast<float>(va), static_cast<float>(vb), v_alpha_m, v_beta_m);
 
-        // Step the motor model
-        motor.step(dt, v_alpha, v_beta);
+        motor.step(dt, static_cast<double>(v_alpha_m), static_cast<double>(v_beta_m));
 
-        // --- Logging (every log_every steps) ---
+        // Logging
         if (++log_count < log_every) continue;
         log_count = 0;
 
-        double i_alpha, i_beta;
-        motor.currents_alphabeta(i_alpha, i_beta);
+        const double ia =  ia_d;
+        const double ib = -0.5 * ia_d + 0.5 * std::sqrt(3.0) * ib_d;
+        const double ic = -0.5 * ia_d - 0.5 * std::sqrt(3.0) * ib_d;
 
-        // alpha/beta -> abc for logging
-        const double ia =  i_alpha;
-        const double ib = -0.5 * i_alpha + 0.5 * std::sqrt(3.0) * i_beta;
-        const double ic = -0.5 * i_alpha - 0.5 * std::sqrt(3.0) * i_beta;
-
-        csv << t               << ","
-            << f_e_cmd         << ","
-            << theta           << ","
-            << motor.theta_e() << ","
-            << motor.omega_m() << ","
-            << va              << "," << vb             << "," << vc             << ","
-            << duty_a          << "," << duty_b         << "," << duty_c         << ","
-            << ia              << "," << ib             << "," << ic             << ","
-            << i_alpha         << "," << i_beta         << ","
-            << motor.id()      << "," << motor.iq()     << ","
-            << motor.torque()  << "\n";
+        csv << t                << ","
+            << omega_m_ref      << ","
+            << motor.omega_m()  << ","
+            << motor.theta_e()  << ","
+            << va               << "," << vb     << "," << vc     << ","
+            << duty_a           << "," << duty_b << "," << duty_c << ","
+            << ia               << "," << ib     << "," << ic     << ","
+            << ia_d             << "," << ib_d   << ","
+            << id_ref           << "," << motor.id() << ","
+            << iq_ref           << "," << motor.iq() << ","
+            << motor.torque()   << "\n";
     }
 
     std::cout << "Done. Wrote results/sim_data.csv\n";

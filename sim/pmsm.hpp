@@ -13,16 +13,15 @@ static constexpr double kTwoPi = 2.0 * kPi;
 class PMSM {
 public:
     struct Params {
-        int    pole_pairs{5};
-        double Rs{0.138};      // Stator resistance (Ohm)
-        double Ld{259e-6};    // d-axis inductance (H)
-        double Lq{275e-6};    // q-axis inductance (H)
-        double psi_f{0.051};  // PM flux linkage (Wb)
-        double J{2.0e-4};     // Rotor inertia (kg*m^2)
-        double B{2.0e-4};     // Viscous friction (N*m*s)
-        double T_load{0.1};   // Constant load torque (N*m)
+        int    pole_pairs;
+        double Rs;
+        double Ld;
+        double Lq;
+        double psi_f;
+        double J;
+        double B;
+        double T_load;
     };
-
     PMSM(const Params& p) : p_(p) {}
 
     void step(double dt_s, double v_alpha, double v_beta);
