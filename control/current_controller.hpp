@@ -1,7 +1,7 @@
 // current_controller.hpp
 // PI controllers for the d and q axis currents, with back-EMF feedforward.
 // The d-axis is clamped first within the full voltage limit; the q-axis
-// gets whatever headroom is left.
+// gets whatever headroom is left on the voltage circle.
 
 #pragma once
 #include <algorithm>
@@ -24,25 +24,25 @@ public:
     };
 
     CurrentController(Params p) : params(p) {
-        // Construct PIs with nominal limits; runtime voltage_limit tightens them each step.
         pi_d = PIController(p.kp_d, p.ki_d, -p.v_max, p.v_max);
         pi_q = PIController(p.kp_q, p.ki_q, -p.v_max, p.v_max);
     }
 
     // voltage_limit is passed per-call so it tracks a live bus voltage measurement.
-    void step(float id_ref, float iq_ref, float id, float iq, float omega, float voltage_limit, float dt, float& vd_out, float& vq_out)
+    // The d-axis PI runs against the full voltage budget; the q-axis output is
+    // then clamped to the remaining circular headroom.
+    void step(float id_ref, float iq_ref, float id, float iq, float omega,  float voltage_limit, float dt, float& vd_out, float& vq_out)
     {
         // Feedforward terms to cancel the motor's back-EMF
         float ff_d = -omega * params.Lq * iq;
-        float ff_q = omega * (params.Ld * id + params.psi_f);
+        float ff_q =  omega * (params.Ld * id + params.psi_f);
 
-        // D-axis uses the full voltage budget; q-axis uses what remains
-        vd_out = std::clamp(pi_d.step(id_ref - id, dt, -voltage_limit, voltage_limit) + ff_d, -voltage_limit, voltage_limit);
+        // D-axis: PI output + feedforward, clamped to the full voltage limit.
+        vd_out = std::clamp(pi_d.step(id_ref - id, dt) + ff_d, -voltage_limit, voltage_limit);
 
+        // Q-axis gets whatever is left on the voltage circle.
         float vq_budget = std::sqrt(std::max(0.0f, voltage_limit * voltage_limit - vd_out * vd_out));
-
-        // Pass both dynMin and dynMax so the PI's anti-windup tracks the circular budget.
-        vq_out = std::clamp(pi_q.step(iq_ref - iq, dt, -vq_budget, vq_budget) + ff_q, -vq_budget, vq_budget);
+        vq_out = std::clamp(pi_q.step(iq_ref - iq, dt) + ff_q, -vq_budget, vq_budget);
     }
 
     void reset() {

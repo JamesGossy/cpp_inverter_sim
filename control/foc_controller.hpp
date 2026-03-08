@@ -1,4 +1,4 @@
-// control/foc.hpp
+// foc_controller.hpp
 // Consolidated FOC controller.
 //
 // Owns all control state and exposes two independently-steppable loops that
@@ -33,9 +33,9 @@ public:
 
     // ── Parameter bundle ──────────────────────────────────────────────────
     struct Params {
-        SpeedController::Params       speed;
+        SpeedController::Params          speed;
         FieldWeakeningController::Params fieldWeakening;
-        CurrentController::Params     current;
+        CurrentController::Params        current;
         float i_max = 0.0f;  // peak current envelope (A) shared between d and q
     };
 
@@ -58,7 +58,6 @@ public:
     struct OuterLoopOutput {
         float voltage_limit = 0.0f;  // Vdc/√3 computed this step (V)
         float id_ref        = 0.0f;  // d-axis current reference from FW (A)
-        float iq_limit      = 0.0f;  // circular current limit for q-axis (A)
         float iq_ref        = 0.0f;  // q-axis current reference from speed ctrl (A)
     };
 
@@ -96,9 +95,7 @@ public:
     // ── Outer loop step (field-weakening + speed controller) ──────────────
     // Call at the slow rate (e.g. every 500 µs / 2 kHz).
     // Returns the updated outer-loop output (also held in state()).
-    const OuterLoopOutput& stepOuter(const Measurements& meas,
-                                     const References& refs,
-                                     float dt)
+    const OuterLoopOutput& stepOuter(const Measurements& meas, const References& refs, float dt)
     {
         output.outer.voltage_limit = SVPWMModulator::voltage_limit(meas.vdc);
 
@@ -106,12 +103,8 @@ public:
         // Uses voltage_mag from the previous inner step as the feedback signal.
         output.outer.id_ref = fwCtrl.step(output.inner.voltage_mag, output.outer.voltage_limit, dt);
 
-        // Circular current limit: id and iq share the same peak-current envelope.
-        const float id_sat = std::clamp(output.outer.id_ref, -params.i_max, params.i_max);
-        output.outer.iq_limit = std::sqrt(std::max(0.0f, params.i_max * params.i_max - id_sat * id_sat));
-
-        // Speed controller: produces iq_ref within the circular limit.
-        output.outer.iq_ref = speedCtrl.step(refs.speed_ref, meas.omega_m, dt, output.outer.iq_limit);
+        // Speed controller: produces iq_ref within its fixed current limit.
+        output.outer.iq_ref = speedCtrl.step(refs.speed_ref, meas.omega_m, dt);
 
         return output.outer;
     }
@@ -127,8 +120,8 @@ public:
         // Park: stationary α/β → rotating d/q
         park(meas.i_alpha, meas.i_beta, meas.theta_e, output.inner.id, output.inner.iq);
 
-        // Current controllers (PI + back-EMF feedforward)
-        currentCtrl.step(output.outer.id_ref, output.outer.iq_ref, output.inner.id, output.inner.iq,  meas.omega_e, output.inner.voltage_limit, dt,output.inner.vd, output.inner.vq);
+        // Current controllers (PI + back-EMF feedforward, d-axis favoured)
+        currentCtrl.step(output.outer.id_ref, output.outer.iq_ref, output.inner.id, output.inner.iq, meas.omega_e, output.inner.voltage_limit, dt, output.inner.vd, output.inner.vq);
 
         // |vdq| is fed back into the FW controller on the next outer step
         output.inner.voltage_mag = std::sqrt(output.inner.vd * output.inner.vd + output.inner.vq * output.inner.vq);

@@ -13,19 +13,10 @@ public:
     PIController() {}
 
     // Run one control step and return the output.
-    // dynMin/dynMax optionally tighten the output clamp for this step
-    float step(float error, float dt, float dynMin = -1.0f, float dynMax = -1.0f) {
+    // The integrator is clamped to [outMin, outMax] for anti-windup.
+    float step(float error, float dt) {
         integral = clamp(integral + ki * error * dt, outMin, outMax);
-
-        float lo = outMin;
-        float hi = outMax;
-        if (dynMax >= 0.0f) {
-            lo = (dynMin >= 0.0f) ? dynMin : -dynMax;
-            hi = dynMax;
-        }
-
-        integral = clamp(integral, lo, hi);
-        return clamp(kp * error + integral, lo, hi);
+        return clamp(kp * error + integral, outMin, outMax);
     }
 
     void  reset(float startValue = 0.0f) { integral = startValue; }

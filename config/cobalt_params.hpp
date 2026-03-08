@@ -42,4 +42,13 @@ namespace gains {
     constexpr float i_max = 60.0f;   // peak current (A)
 }
 
+namespace faults {
+    constexpr float overspeed_rpm      = 16000.0f;  // mechanical speed (RPM)
+    constexpr float overvoltage_v      = 560.0f;    // DC bus voltage (V)
+    constexpr float overcurrent_a      = 75.0f;     // peak phase current (A)
+    constexpr float motor_overtemp_c   = 140.0f;    // motor winding temperature (°C)
+    constexpr float ambient_overtemp_c = 70.0f;     // ambient enclosure temperature (°C)
+    constexpr float module_overtemp_c  = 100.0f;    // power module temperature (°C)
+}
+
 } // namespace cobalt
