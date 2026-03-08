@@ -1,62 +1,50 @@
 // pmsm.hpp
-// Simulates a permanent magnet motor: tracks currents, speed, and position over time
+// Simulates a permanent magnet synchronous motor (PMSM).
 
 #pragma once
 #include <cmath>
 
 namespace sim {
 
-const double PI     = 3.14159265358979323846;
+const double PI = 3.14159265358979323846;
 const double TWO_PI = 2.0 * PI;
 
 class PMSM {
 public:
 
-    // All the physical properties of the motor
     struct Params {
-        int    pole_pairs;  // number of magnetic pole pairs
-        double Rs;          // winding resistance (ohms)
-        double Ld;          // d-axis inductance (henries)
-        double Lq;          // q-axis inductance (henries)
-        double psi_f;       // flux from the permanent magnets
-        double J;           // rotor inertia (kg·m²)
-        double B;           // friction/damping coefficient
-        double T_load;      // constant load torque applied to the shaft
+        int pole_pairs;
+        double Rs, Ld, Lq, psi_f;
+        double J, B, T_load;
+        Params() = default;
+        Params(int pole_pairs, double Rs, double Ld, double Lq, double psi_f, double J, double B, double T_load) : pole_pairs(pole_pairs), Rs(Rs), Ld(Ld), Lq(Lq), psi_f(psi_f), J(J), B(B), T_load(T_load) {}
     };
 
-    // Set up the motor with the given parameters
-    PMSM(Params p) {
-        params = p;
-    }
+    PMSM(Params p) : params(p) {}
 
-    // Advance the motor simulation by one time step
+    // Advance the motor by one time step given alpha/beta voltages
     void step(double dt, double v_alpha, double v_beta);
 
-    // Get the current electrical angle
-    double theta_e() const {
-        return std::fmod(params.pole_pairs * theta_m, TWO_PI);
-    }
-
-    // Get the current mechanical speed (rad/s)
+    double theta_e() const { return std::fmod(params.pole_pairs * theta_m, TWO_PI); }
     double omega_m() const { return speed; }
-
-    // Get the current torque being produced
     double torque() const { return Te; }
-
-    // Get the d and q axis currents
     double id() const { return id_; }
     double iq() const { return iq_; }
 
-    // Convert d/q currents back to alpha/beta 
+    // Return the stator currents in the alpha/beta frame
     void currents_alphabeta(double& i_alpha, double& i_beta) const;
+    void currents_alphabeta(float&  i_alpha, float&  i_beta) const {
+        double a, b; currents_alphabeta(a, b);
+        i_alpha = (float)a; i_beta = (float)b;
+    }
 
 private:
     Params params;
-    double id_    = 0.0;  // d-axis current
-    double iq_    = 0.0;  // q-axis current
-    double speed  = 0.0;  // mechanical speed (rad/s)
-    double theta_m = 0.0; // mechanical angle (radians)
-    double Te     = 0.0;  // electromagnetic torque
+    double id_ = 0.0;
+    double iq_ = 0.0;
+    double speed = 0.0;  // mechanical speed (rad/s)
+    double theta_m = 0.0;  // mechanical angle (rad)
+    double Te = 0.0;  // electromagnetic torque (N·m)
 };
 
 }

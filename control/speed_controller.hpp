@@ -1,7 +1,8 @@
 // speed_controller.hpp
-// Outer speed loop: takes a target speed and outputs how much q-axis current to request
+// Outer speed loop: converts a speed error into a q-axis current request.
 
 #pragma once
+#include <algorithm>
 #include "pi_controller.hpp"
 
 namespace foc {
@@ -9,30 +10,27 @@ namespace foc {
 class SpeedController {
 public:
 
-    // All the settings needed to set up the speed controller
     struct Params {
-        float kp;      // proportional gain
-        float ki;      // integral gain
-        float iq_max;  // maximum current we're allowed to request
+        float kp;
+        float ki;
+        float iq_max;
+        Params() = default;
+        Params(float kp, float ki, float iq_max) : kp(kp), ki(ki), iq_max(iq_max) {}
     };
 
-    // Set up the controller with the given parameters
-    SpeedController(Params p) {
-        pi = PIController(p.kp, p.ki, -p.iq_max, p.iq_max);
+    // Output is clamped to [0, iq_max] — q-axis current is always positive.
+    SpeedController(Params p): iq_max(p.iq_max), pi(p.kp, p.ki, 0.0f, p.iq_max) {}
+
+    // iq_limit lets field weakening reduce the current budget. Omit otherwise.
+    float step(float targetSpeed, float actualSpeed, float dt, float iq_limit = -1.0f) {
+        float limit = (iq_limit < 0.0f) ? iq_max : std::min(iq_limit, iq_max);
+        return pi.step(targetSpeed - actualSpeed, dt, 0.0f, limit);
     }
 
-    // Run one step: given target and actual speed, returns the q-axis current to request
-    float step(float targetSpeed, float actualSpeed, float dt) {
-        float error = targetSpeed - actualSpeed;
-        return pi.step(error, dt);
-    }
-
-    // Reset the PI controller back to zero
-    void reset() {
-        pi.reset();
-    }
+    void reset() { pi.reset(); }
 
 private:
+    float iq_max = 0.0f;
     PIController pi;
 };
 

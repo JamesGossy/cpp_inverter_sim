@@ -1,156 +1,102 @@
-// main.cpp
-// Runs a closed-loop FOC simulation of a PMSM motor and saves results to a CSV
+// sim_main.cpp
+// Closed-loop FOC simulation of a PMSM.
+//
+//  Outer loop  –   2 kHz  (every 500 ticks) : field-weakening + speed controller
+//  Inner loop  –  20 kHz  (every  50 ticks) : transforms, current controllers, SVPWM
+//  Plant       –   1 MHz  (every tick)      : inverter + PMSM integration
 
-#include <array>
 #include <cmath>
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
+#include <cstdint>
 #include <iostream>
 
+#include "config/cobalt_params.hpp"
 #include "control/current_controller.hpp"
+#include "control/field_weakening_controller.hpp"
 #include "control/modulation.hpp"
 #include "control/speed_controller.hpp"
 #include "control/transforms.hpp"
 #include "sim/inverter.hpp"
+#include "sim/logger.hpp"
 #include "sim/pmsm.hpp"
+
+namespace sim_cfg {
+    constexpr double DT = 1e-6;
+    constexpr double T_END = 0.20;
+    constexpr double TARGET_RPM = 20000.0;
+    constexpr int LOG_EVERY = 20;
+}
 
 int main() {
 
-    // How long to simulate and how small each time step is
-    double dt    = 1e-6;   // 1 microsecond per step
-    double t_end = 0.20;   // simulate for 200ms
+    namespace mot = cobalt::motor;
+    namespace inv = cobalt::inverter;
+    namespace g = cobalt::gains;
 
-    // ── Motor parameters ──────────────────────────────────────────────────────
-    sim::PMSM::Params mp;
-    mp.pole_pairs = 5;
-    mp.Rs         = 0.138;
-    mp.Ld         = 520e-6;
-    mp.Lq         = 550e-6;
-    mp.psi_f      = 0.051;
-    mp.J          = 2.0e-4;
-    mp.B          = 2.0e-4;
-    mp.T_load     = 0.1;
+    // ── Setup ─────────────────────────────────────────────────────────────
+    sim::PMSM motor({ mot::pole_pairs, mot::Rs, mot::Ld, mot::Lq, mot::psi_f, mot::J,  mot::B,  mot::T_load });
 
-    sim::PMSM motor(mp);
+    sim::Inverter simInv(inv::vdc);
+    foc::SVPWMModulator mod(inv::vdc);
 
-    // ── Inverter and modulator ────────────────────────────────────────────────
-    double vdc = 480.0;
-    sim::Inverter       inv(vdc);
-    foc::SVPWMModulator mod(static_cast<float>(vdc));
+    foc::SpeedController speedCtrl({ g::kp_speed, g::ki_speed, g::i_max });
+    foc::FieldWeakeningController fwCtrl({ 0.f, g::ki_fw, -g::i_max, 0.f, g::fw_voltage_target });
+    foc::CurrentController currentCtrl({ g::kp_d, g::ki_d, g::kp_q, g::ki_q, mot::Ld, mot::Lq, mot::psi_f, inv::v_max });
 
-    // ── Target speed ──────────────────────────────────────────────────────────
-    double targetRPM   = 5000.0;  // mechanical speed in RPM
-    double targetSpeed = targetRPM * 2.0 * foc::PI / 60.0;  // convert to rad/s
+    // ── Shared state between tiers ────────────────────────────────────────
+    float theta_e = 0.f, omega_m = 0.f, omega_e = 0.f;
+    float i_alpha = 0.f, i_beta = 0.f;
+    float id_ref = 0.f, iq_ref = 0.f;
+    float duty_a = 0.5f, duty_b = 0.5f, duty_c = 0.5f;
+    float vMag = 0.f;
 
-    // ── Speed controller ──────────────────────────────────────────────────────
-    foc::SpeedController::Params sc;
-    sc.kp     = 0.3f;
-    sc.ki     = 0.025f;
-    sc.iq_max = 20.0f;
+    const double TARGET_SPEED = sim_cfg::TARGET_RPM * 2.0 * foc::PI / 60.0;
+    sim::Logger logger("results/sim_data.csv", sim_cfg::LOG_EVERY);
 
-    foc::SpeedController speedCtrl(sc);
+    // ── Main loop ─────────────────────────────────────────────────────────
+    const uint64_t totalTicks = static_cast<uint64_t>(sim_cfg::T_END / sim_cfg::DT) + 1;
 
-    // ── Current controller ────────────────────────────────────────────────────
-    foc::CurrentController::Params cc;
-    cc.kp_d  = 0.8f;
-    cc.ki_d  = 300.0f;
-    cc.kp_q  = 0.8f;
-    cc.ki_q  = 300.0f;
-    cc.Ld    = static_cast<float>(mp.Ld);
-    cc.Lq    = static_cast<float>(mp.Lq);
-    cc.psi_f = static_cast<float>(mp.psi_f);
-    cc.v_max = static_cast<float>(vdc / std::sqrt(3.0));
+    for (uint64_t n = 0; n < totalTicks; ++n) {
 
-    foc::CurrentController currentCtrl(cc);
+        const double t = static_cast<double>(n) * sim_cfg::DT;
+        const double speedRef = (t < 0.1) ? 0.0 : TARGET_SPEED;
 
-    // ── Set up CSV logging ────────────────────────────────────────────────────
-    std::filesystem::create_directories("results");
-    std::ofstream csv("results/sim_data.csv");
-    if (!csv) { std::cerr << "Failed to open results/sim_data.csv\n"; return 1; }
+        // Outer loop – 2 kHz
+        if (n % 500 == 0) {
+            id_ref = fwCtrl.step(vMag, inv::v_max, 500e-6f);
+            float id_sat = std::clamp(id_ref, -g::i_max, g::i_max);
+            float iq_limit = std::sqrt(std::max(0.f, g::i_max * g::i_max - id_sat * id_sat));
+            iq_ref = speedCtrl.step(static_cast<float>(speedRef), omega_m, 500e-6f, iq_limit);
+        }
 
-    csv << "t,rpm_ref,rpm,theta_e_true,"
-           "va,vb,vc,duty_a,duty_b,duty_c,"
-           "ia,ib,ic,ialpha,ibeta,"
-           "id_ref,id_true,iq_ref,iq_true,Te\n"
-        << std::fixed << std::setprecision(8);
+        // Inner loop – 20 kHz
+        if (n % 50 == 0) {
+            float id_meas, iq_meas;
+            foc::park(i_alpha, i_beta, theta_e, id_meas, iq_meas);
 
-    // Only log every 20 steps to keep the file a manageable size
-    int logEvery = 20;
-    int logCount = 0;
+            float vd, vq;
+            currentCtrl.step(id_ref, iq_ref, id_meas, iq_meas, omega_e, 50e-6f, vd, vq);
+            vMag = std::sqrt(vd * vd + vq * vq);
 
-    // ── Main simulation loop ──────────────────────────────────────────────────
-    for (double t = 0.0; t <= t_end; t += dt) {
+            float v_alpha, v_beta, va, vb, vc;
+            foc::inv_park(vd, vq, theta_e, v_alpha, v_beta);
+            foc::inv_clarke(v_alpha, v_beta, va, vb, vc);
+            mod.step(va, vb, vc, duty_a, duty_b, duty_c);
+        }
 
-        // Ramp the speed target up over the first 100ms, then hold it steady
-        double speedRef = (t < 0.10)
-            ? targetSpeed * (t / 0.10)
-            : targetSpeed;
-
-        // Read the current motor state
-        float theta_e = static_cast<float>(motor.theta_e());
-        float omega_m = static_cast<float>(motor.omega_m());
-        float omega_e = static_cast<float>(mp.pole_pairs * motor.omega_m());
-
-        // Get alpha/beta currents from the motor
-        double ia_d, ib_d;
-        motor.currents_alphabeta(ia_d, ib_d);
-        float i_alpha = static_cast<float>(ia_d);
-        float i_beta  = static_cast<float>(ib_d);
-
-        // Rotate alpha/beta currents into the d/q frame using the rotor angle
-        float id_meas, iq_meas;
-        foc::park(i_alpha, i_beta, theta_e, id_meas, iq_meas);
-
-        // Speed controller outputs iq_ref, id_ref is always zero
-        float id_ref = 0.0f;
-        float iq_ref = speedCtrl.step(static_cast<float>(speedRef), omega_m, static_cast<float>(dt));
-
-        // Current controller outputs the d/q voltages to apply
-        float vd, vq;
-        currentCtrl.step(id_ref, iq_ref, id_meas, iq_meas, omega_e, static_cast<float>(dt), vd, vq);
-
-        // Rotate d/q voltages back into alpha/beta
-        float v_alpha_ref, v_beta_ref;
-        foc::inv_park(vd, vq, theta_e, v_alpha_ref, v_beta_ref);
-
-        // Convert alpha/beta voltages → 3-phase → duty cycles → actual phase voltages
-        float va_ref, vb_ref, vc_ref;
-        foc::inv_clarke(v_alpha_ref, v_beta_ref, va_ref, vb_ref, vc_ref);
-
-        float duty_a, duty_b, duty_c;
-        mod.step(va_ref, vb_ref, vc_ref, duty_a, duty_b, duty_c);
-
+        // Plant – 1 MHz
         double va, vb, vc;
-        inv.step(static_cast<double>(duty_a), static_cast<double>(duty_b), static_cast<double>(duty_c), va, vb, vc);
+        simInv.step(duty_a, duty_b, duty_c, va, vb, vc);
 
-        // Convert the applied phase voltages back to alpha/beta to feed the motor model
-        float v_alpha_m, v_beta_m;
-        foc::clarke(static_cast<float>(va), static_cast<float>(vb), v_alpha_m, v_beta_m);
+        float v_alpha, v_beta;
+        foc::clarke((float)va, (float)vb, v_alpha, v_beta);
+        motor.step(sim_cfg::DT, (double)v_alpha, (double)v_beta);
 
-        // Step the motor simulation forward
-        motor.step(dt, static_cast<double>(v_alpha_m), static_cast<double>(v_beta_m));
+        theta_e = (float)motor.theta_e();
+        omega_m = (float)motor.omega_m();
+        omega_e = (float)mot::pole_pairs * omega_m;
+        motor.currents_alphabeta(i_alpha, i_beta);
 
-        // Only write to CSV every logEvery steps
-        if (++logCount < logEvery) continue;
-        logCount = 0;
-
-        // Reconstruct the 3-phase currents from alpha/beta for logging
-        double ia =  ia_d;
-        double ib = -0.5 * ia_d + 0.5 * std::sqrt(3.0) * ib_d;
-        double ic = -0.5 * ia_d - 0.5 * std::sqrt(3.0) * ib_d;
-
-        csv << t               << ","
-            << speedRef * 60.0 / (2.0 * foc::PI)   << ","  
-            << motor.omega_m() * 60.0 / (2.0 * foc::PI) << ","  
-            << motor.theta_e() << ","
-            << va              << "," << vb     << "," << vc     << ","
-            << duty_a          << "," << duty_b << "," << duty_c << ","
-            << ia              << "," << ib     << "," << ic     << ","
-            << ia_d            << "," << ib_d   << ","
-            << id_ref          << "," << motor.id() << ","
-            << iq_ref          << "," << motor.iq() << ","
-            << motor.torque()  << "\n";
+        logger.log(motor, t, speedRef, id_ref, iq_ref, duty_a, duty_b, duty_c, va, vb, vc);
     }
 
     std::cout << "Done. Wrote results/sim_data.csv\n";

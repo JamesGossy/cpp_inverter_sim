@@ -7,9 +7,9 @@
 namespace foc {
 
 // Constants
-const float PI       = 3.14159265f;
-const float TWO_PI   = 2.0f * PI;
-const float SQRT3    = 1.73205080f;
+const float PI = 3.14159265f;
+const float TWO_PI = 2.0f * PI;
+const float SQRT3 = 1.73205080f;
 
 // Keeps an angle between 0 and 2*PI
 inline float wrap_0_to_2pi(float angle) {

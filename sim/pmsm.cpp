@@ -1,5 +1,5 @@
-// pmsm_dq.cpp
-// Updates the motor simulation by one time step
+// pmsm.cpp
+// PMSM simulation step: updates currents, torque, speed, and position.
 
 #include "pmsm.hpp"
 #include <cmath>
@@ -8,34 +8,31 @@ namespace sim {
 
 void PMSM::step(double dt, double v_alpha, double v_beta) {
 
-    // Get the current electrical angle and electrical speed
     double theta = theta_e();
-    double we    = params.pole_pairs * speed;
+    double we = params.pole_pairs * speed;
 
-    // Rotate the input voltages from alpha/beta into the d/q frame
+    // Rotate voltages from alpha/beta into the d/q frame
     double c  = std::cos(theta);
     double s  = std::sin(theta);
-    double vd =  c * v_alpha + s * v_beta;
+    double vd = c * v_alpha + s * v_beta;
     double vq = -s * v_alpha + c * v_beta;
 
-    // Calculate how fast the d and q currents are changing
+    // Current derivatives from the motor voltage equations
     double did = (vd - params.Rs * id_ + we * params.Lq * iq_) / params.Ld;
     double diq = (vq - params.Rs * iq_ - we * (params.Ld * id_ + params.psi_f)) / params.Lq;
 
-    // Update the currents using Euler integration
     id_ += did * dt;
     iq_ += diq * dt;
 
-    // Calculate the torque produced by the motor
+    // Electromagnetic torque
     Te = 1.5 * params.pole_pairs * (params.psi_f * iq_ + (params.Ld - params.Lq) * id_ * iq_);
 
-    // Calculate how fast the speed is changing, then update speed and position
+    // Speed and position
     double dspeed = (Te - params.T_load - params.B * speed) / params.J;
-    speed   += dspeed * dt;
-    theta_m += speed  * dt;
+    speed += dspeed * dt;
+    theta_m += speed * dt;
 }
 
-// Convert the internal d/q currents back to alpha/beta 
 void PMSM::currents_alphabeta(double& i_alpha, double& i_beta) const {
     double theta = theta_e();
     double c = std::cos(theta);
