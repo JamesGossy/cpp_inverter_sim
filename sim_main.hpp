@@ -8,7 +8,9 @@
 #include <cstdint>
 
 #include "config/cobalt_params.hpp"
+#include "control/encoder_compensation.hpp"
 #include "control/foc_controller.hpp"
+#include "sim/encoder_delay.hpp"
 #include "sim/inverter.hpp"
 #include "sim/logger.hpp"
 #include "sim/pmsm.hpp"
@@ -17,7 +19,7 @@
 namespace sim_cfg {
     constexpr double DT         = 1e-6;
     constexpr double T_END      = 0.20;
-    constexpr double TARGET_RPM = 17000.0;
+    constexpr double TARGET_RPM = 14000.0;
     constexpr int    LOG_EVERY  = 20;
 
     constexpr int   OUTER_STRIDE = 500;   // 1 MHz / 500 = 2 kHz
@@ -31,7 +33,8 @@ namespace sim_cfg {
 inline sim::PMSM makePMSM()
 {
     namespace m = cobalt::motor;
-    return sim::PMSM({ m::pole_pairs, m::Rs, m::Ld, m::Lq, m::psi_f, m::J, m::B, m::T_load });
+    return sim::PMSM({ m::pole_pairs, m::Rs, m::Ld, m::Lq,
+                       m::psi_f, m::J, m::B, m::T_load });
 }
 
 inline foc::FocController makeFocController()
@@ -43,19 +46,26 @@ inline foc::FocController makeFocController()
     foc::FocController::Params p;
     p.speed          = { g::kp_speed, g::ki_speed, g::i_max };
     p.fieldWeakening = { g::kp_fw, g::ki_fw, -g::i_max, 0.f, g::fw_voltage_target };
-    p.current        = { g::kp_d, g::ki_d, g::kp_q, g::ki_q, m::Ld, m::Lq, m::psi_f, i::v_max };
+    p.current        = { g::kp_d, g::ki_d, g::kp_q, g::ki_q,
+                         m::Ld, m::Lq, m::psi_f, i::v_max };
     p.i_max          = g::i_max;
     return foc::FocController(p);
 }
 
 // ── Per-tick helpers ───────────────────────────────────────────────────────
 
-inline foc::FocController::Measurements buildMeasurements(const sim::PMSM& motor)
+// Pushes the true angle through the sim delay line, then compensates.
+// encoderDelay is mutated each tick so it must be held in main().
+inline foc::FocController::Measurements buildMeasurements(const sim::PMSM& motor,
+                                                          sim::EncoderDelay& encoderDelay)
 {
     foc::FocController::Measurements meas;
-    meas.theta_e = static_cast<float>(motor.theta_e());
     meas.omega_m = static_cast<float>(motor.omega_m());
     meas.omega_e = static_cast<float>(cobalt::motor::pole_pairs) * meas.omega_m;
+
+    const float theta_delayed = encoderDelay.push(static_cast<float>(motor.theta_e()));
+    meas.theta_e = foc::compensateEncoderDelay(theta_delayed, meas.omega_e);
+
     motor.currents_alphabeta(meas.i_alpha, meas.i_beta);
     meas.vdc = cobalt::inverter::vdc;  // on hardware: read from bus voltage ADC each tick
     return meas;
