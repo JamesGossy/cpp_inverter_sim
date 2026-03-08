@@ -10,10 +10,16 @@ namespace foc {
 class SVPWMModulator {
 public:
 
-    SVPWMModulator(float busVoltage) : vdc(busVoltage) {}
+    SVPWMModulator() = default;
 
-    void step(float va, float vb, float vc,
-              float& duty_a, float& duty_b, float& duty_c)
+    // Maximum phase voltage achievable with SVPWM (Vdc / √3).
+    // Call this to get the voltage limit to pass into the current controller.
+    static float voltage_limit(float vdc) {
+        return vdc * 0.5773503f;  // vdc / √3
+    }
+
+    // vdc is passed per-call so it tracks a live bus voltage measurement.
+    void step(float va, float vb, float vc, float vdc, float& duty_a, float& duty_b, float& duty_c)
     {
         // Find the mid-point of the three voltages and shift them all by it.
         // This centres the waveforms within the bus voltage range (SVPWM offset).
@@ -30,10 +36,7 @@ public:
         duty_c = clamp(0.5f + (vc + offset) / vdc);
     }
 
-    float getVdc() const { return vdc; }
-
 private:
-    float vdc;
 
     float clamp(float x) {
         if (x < 0.0f) return 0.0f;

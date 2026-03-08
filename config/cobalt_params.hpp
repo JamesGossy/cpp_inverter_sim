@@ -34,6 +34,7 @@ namespace gains {
     constexpr float ki_speed = 0.05f;
 
     // Field weakening (outer loop, 2 kHz)
+    constexpr float kp_fw            = 0.02f;
     constexpr float ki_fw            = 400.0f;
     constexpr float fw_voltage_target = 0.95f;  // fraction of v_max
 
