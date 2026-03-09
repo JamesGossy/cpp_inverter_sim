@@ -1,6 +1,5 @@
 // angle_generator.hpp
-// Integrates electrical angle open-loop: theta += omega * dt.
-// Requires: transforms.hpp
+// Tracks an electrical angle that advances each time step.
 
 #pragma once
 #include "transforms.hpp"
@@ -9,14 +8,22 @@ namespace foc {
 
 class AngleGenerator {
 public:
-    void reset(float theta0_rad = 0.0f) {theta_ = wrap_0_to_2pi(theta0_rad);}
 
-    void step(float omega_rad_s, float dt_s) {theta_ = wrap_0_to_2pi(theta_ + omega_rad_s * dt_s);}
+    void reset(float startAngle = 0.0f) {
+        angle = wrap_0_to_2pi(startAngle);
+    }
 
-    float theta() const { return theta_; }
+    // Advances the angle by speed (rad/s) * dt.
+    void step(float speed, float dt) {
+        angle = wrap_0_to_2pi(angle + speed * dt);
+    }
+
+    float theta() const {
+        return angle;
+    }
 
 private:
-    float theta_{0.0f};
+    float angle = 0.0f;
 };
 
 }

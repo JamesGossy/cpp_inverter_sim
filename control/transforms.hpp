@@ -1,47 +1,50 @@
 // transforms.hpp
-// Clarke (abc->αβ), Park (αβ->dq), and their inverses.
-// Requires: <math.h>  (fmodf, cosf, sinf — must resolve on your target platform)
+// Math helpers for FOC
 
 #pragma once
 #include <math.h>
 
 namespace foc {
 
-constexpr float kPi       = 3.14159265f;
-constexpr float kSqrt3    = 1.73205080f;
-constexpr float kTwoPi    = 2.0f * kPi;
-constexpr float kInvSqrt3 = 1.0f / kSqrt3;  // 1/√3 — used for SVPWM voltage limit
+// Constants
+const float PI = 3.14159265f;
+const float TWO_PI = 2.0f * PI;
+const float SQRT3 = 1.73205080f;
 
-inline float wrap_0_to_2pi(float theta) {
-    theta = fmodf(theta, kTwoPi);
-    return (theta < 0.0f) ? theta + kTwoPi : theta;
+// Keeps an angle between 0 and 2*PI
+inline float wrap_0_to_2pi(float angle) {
+    angle = fmodf(angle, TWO_PI); // remove full rotations
+    if (angle < 0) angle += TWO_PI; // make sure it's positive
+    return angle;
 }
 
-// abc -> alpha/beta
+// Convert 3-phase motor currents (a, b, c) into 2 values (alpha, beta)
 inline void clarke(float a, float b, float& alpha, float& beta) {
     alpha = a;
-    beta  = (a + 2.0f * b) / kSqrt3;
+    beta  = (a + 2.0f * b) / SQRT3;
 }
 
-// alpha/beta -> abc
+// Reverse of clarke: convert alpha/beta back into 3-phase values
 inline void inv_clarke(float alpha, float beta, float& a, float& b, float& c) {
     a =  alpha;
-    b = -0.5f * alpha + 0.5f * kSqrt3 * beta;
-    c = -0.5f * alpha - 0.5f * kSqrt3 * beta;
+    b = -0.5f * alpha + 0.5f * SQRT3 * beta;
+    c = -0.5f * alpha - 0.5f * SQRT3 * beta;
 }
 
-// alpha/beta -> d/q
-inline void park(float alpha, float beta, float theta, float& d, float& q) {
-    const float co = cosf(theta), si = sinf(theta);
-    d =  co * alpha + si * beta;
-    q = -si * alpha + co * beta;
+// Rotate alpha/beta by the rotor angle to get d/q values
+inline void park(float alpha, float beta, float angle, float& d, float& q) {
+    float c = cosf(angle);
+    float s = sinf(angle);
+    d =  c * alpha + s * beta;
+    q = -s * alpha + c * beta;
 }
 
-// d/q -> alpha/beta
-inline void inv_park(float d, float q, float theta, float& alpha, float& beta) {
-    const float co = cosf(theta), si = sinf(theta);
-    alpha = co * d - si * q;
-    beta  = si * d + co * q;
+// Reverse of park: convert d/q back into alpha/beta
+inline void inv_park(float d, float q, float angle, float& alpha, float& beta) {
+    float c = cosf(angle);
+    float s = sinf(angle);
+    alpha = c * d - s * q;
+    beta  = s * d + c * q;
 }
 
 }

@@ -1,0 +1,57 @@
+// current_controller.hpp
+// PI controllers for the d and q axis currents, with back-EMF feedforward.
+// Voltage output is limited by voltage bus favouring the d-axis.
+
+
+#pragma once
+#include <algorithm>
+#include <cmath>
+#include "pi_controller.hpp"
+
+namespace foc {
+
+class CurrentController {
+public:
+
+    struct Params {
+        float kp_d, ki_d;
+        float kp_q, ki_q;
+        float Ld, Lq;
+        float psi_f;
+        float v_max;
+        Params() = default;
+        Params(float kp_d, float ki_d, float kp_q, float ki_q, float Ld, float Lq, float psi_f, float v_max) : kp_d(kp_d), ki_d(ki_d), kp_q(kp_q), ki_q(ki_q), Ld(Ld), Lq(Lq), psi_f(psi_f), v_max(v_max) {}
+    };
+
+    CurrentController(Params p) : params(p) {
+        pi_d = PIController(p.kp_d, p.ki_d, -p.v_max, p.v_max);
+        pi_q = PIController(p.kp_q, p.ki_q, -p.v_max, p.v_max);
+    }
+
+    // Voltage output is limited by voltage bus favouring the d-axis.
+    void step(float id_ref, float iq_ref, float id, float iq, float omega,  float voltage_limit, float dt, float& vd_out, float& vq_out)
+    {
+        // Feedforward terms to cancel the motor's back-EMF
+        float ff_d = -omega * params.Lq * iq;
+        float ff_q =  omega * (params.Ld * id + params.psi_f);
+
+        // D-axis: PI output + feedforward, clamped to the full voltage limit.
+        vd_out = std::clamp(pi_d.step(id_ref - id, dt) + ff_d, -voltage_limit, voltage_limit);
+
+        // Q-axis gets whatever is left on the voltage circle.
+        float vq_budget = std::sqrt(std::max(0.0f, voltage_limit * voltage_limit - vd_out * vd_out));
+        vq_out = std::clamp(pi_q.step(iq_ref - iq, dt) + ff_q, -vq_budget, vq_budget);
+    }
+
+    void reset() {
+        pi_d.reset();
+        pi_q.reset();
+    }
+
+private:
+    Params params;
+    PIController pi_d;
+    PIController pi_q;
+};
+
+}
