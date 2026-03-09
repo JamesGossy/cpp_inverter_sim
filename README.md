@@ -1,4 +1,4 @@
-# Cobalt Inverter Sim
+# CPP Inverter Sim
 
 Closed-loop FOC simulation of a PMSM, written in C++ with a Python visualisation script. The control code is written to be shared directly with the MCU firmware, all parameters, transforms, and controller logic compile on both the sim and the target.
 
