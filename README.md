@@ -91,6 +91,8 @@ plant/
 sim/
   encoder_delay.hpp       — ring buffer simulating angle measurement latency
   logger.hpp              — decimated CSV logger
+  sim_main.cpp              — simulation entry point
+  sim_main.hpp              — configuration, factory functions, and per-tick helpers
 
 system/
   faults.hpp              — latching fault flags and update logic
@@ -100,8 +102,7 @@ scripts/
   results/
     sim_data.csv          — simulation output (generated on run)
 
-sim_main.cpp              — simulation entry point
-sim_main.hpp              — configuration, factory functions, and per-tick helpers
+
 ```
 
 ---
