@@ -106,6 +106,13 @@ public:
         // Speed controller: produces iq_ref within its fixed current limit.
         output.outer.iq_ref = speedCtrl.step(refs.speed_ref, meas.omega_m, dt);
 
+        // Current circle limit: clamp id_ref first (d-axis has priority as it
+        // controls flux and field weakening), then give iq_ref whatever headroom
+        // remains on the circle  sqrt(id² + iq²) <= i_max.
+        output.outer.id_ref = std::clamp(output.outer.id_ref, -params.i_max, params.i_max);
+        const float iq_budget = std::sqrt(std::max(0.0f, params.i_max * params.i_max - output.outer.id_ref * output.outer.id_ref));
+        output.outer.iq_ref = std::clamp(output.outer.iq_ref, -iq_budget, iq_budget);
+
         return output.outer;
     }
 

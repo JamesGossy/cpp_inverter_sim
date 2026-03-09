@@ -16,13 +16,11 @@ struct Faults {
     bool module_overtemp  = false;
 
     bool any() const {
-        return overspeed | overvoltage | overcurrent
-             | motor_overtemp | ambient_overtemp | module_overtemp;
+        return overspeed | overvoltage | overcurrent | motor_overtemp | ambient_overtemp | module_overtemp;
     }
 
     void clear() {
-        overspeed = overvoltage = overcurrent
-            = motor_overtemp = ambient_overtemp = module_overtemp = false;
+        overspeed = overvoltage = overcurrent = motor_overtemp = ambient_overtemp = module_overtemp = false;
     }
 };
 

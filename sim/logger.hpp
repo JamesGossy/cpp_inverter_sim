@@ -9,7 +9,7 @@
 #include <iostream>
 #include <string>
 
-#include "sim/pmsm.hpp"
+#include "plant/pmsm.hpp"
 #include "control/transforms.hpp"
 
 namespace sim {

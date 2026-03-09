@@ -4,7 +4,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-df = pd.read_csv("results/sim_data.csv")
+df = pd.read_csv("scripts/results/sim_data.csv")
 t  = df["t"].values
 
 plots = [

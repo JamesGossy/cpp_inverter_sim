@@ -11,15 +11,15 @@
 #include "control/encoder_compensation.hpp"
 #include "control/foc_controller.hpp"
 #include "sim/encoder_delay.hpp"
-#include "sim/inverter.hpp"
-#include "sim/logger.hpp"
-#include "sim/pmsm.hpp"
+#include "plant/inverter.hpp"
+#include "logger.hpp"
+#include "plant/pmsm.hpp"
 #include "system/faults.hpp"
 
 namespace sim_cfg {
     constexpr double DT         = 1e-6;
-    constexpr double T_END      = 0.20;
-    constexpr double TARGET_RPM = 14000.0;
+    constexpr double T_END      = 0.30;
+    constexpr double TARGET_RPM = 20000.0;
     constexpr int    LOG_EVERY  = 20;
 
     constexpr int   OUTER_STRIDE = 500;   // 1 MHz / 500 = 2 kHz
@@ -46,8 +46,7 @@ inline foc::FocController makeFocController()
     foc::FocController::Params p;
     p.speed          = { g::kp_speed, g::ki_speed, g::i_max };
     p.fieldWeakening = { g::kp_fw, g::ki_fw, -g::i_max, 0.f, g::fw_voltage_target };
-    p.current        = { g::kp_d, g::ki_d, g::kp_q, g::ki_q,
-                         m::Ld, m::Lq, m::psi_f, i::v_max };
+    p.current        = { g::kp_d, g::ki_d, g::kp_q, g::ki_q, m::Ld, m::Lq, m::psi_f, i::v_max };
     p.i_max          = g::i_max;
     return foc::FocController(p);
 }

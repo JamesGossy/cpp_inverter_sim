@@ -43,7 +43,7 @@ namespace gains {
 }
 
 namespace faults {
-    constexpr float overspeed_rpm      = 16000.0f;  // mechanical speed (RPM)
+    constexpr float overspeed_rpm      = 20000.0f;  // mechanical speed (RPM)
     constexpr float overvoltage_v      = 560.0f;    // DC bus voltage (V)
     constexpr float overcurrent_a      = 75.0f;     // peak phase current (A)
     constexpr float motor_overtemp_c   = 140.0f;    // motor winding temperature (°C)
