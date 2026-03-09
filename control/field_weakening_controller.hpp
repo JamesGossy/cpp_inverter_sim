@@ -11,22 +11,21 @@ class FieldWeakeningController {
 public:
 
     struct Params {
-        float kp;
-        float ki;
-        float id_min;
-        float id_max;
-        float voltage_target;
+        float kp;               // proportional gain
+        float ki;               // integral gain
+        float id_min;           // most negative id the controller can demand (A)
+        float id_max;           // upper clamp, typically 0 (FW only pulls id negative)
+        float voltage_target;   // fraction of voltage_limit at which FW begins acting
+
         Params() = default;
         Params(float kp, float ki, float id_min, float id_max, float voltage_target) : kp(kp), ki(ki), id_min(id_min), id_max(id_max), voltage_target(voltage_target) {}
     };
 
     FieldWeakeningController() {}
 
-    FieldWeakeningController(Params p)
-        : params(p), pi(p.kp, p.ki, p.id_min, p.id_max) {}
+    FieldWeakeningController(Params p) : params(p), pi(p.kp, p.ki, p.id_min, p.id_max) {}
 
-    // Returns the d-axis current reference.
-    // voltageMagnitude is the applied dq voltage from the previous step.
+    // Returns id_ref. voltageMagnitude is |vdq| from the previous inner step.
     float step(float voltageMagnitude, float voltageLimit, float dt) {
         float target = params.voltage_target * voltageLimit;
         return pi.step(target - voltageMagnitude, dt);

@@ -1,38 +1,33 @@
-// sim/encoder_delay.hpp
-// Simulates a fixed angle measurement latency using a ring buffer.
-// This is sim-only — on hardware the delay is physical and needs no modelling.
-//
-// Sized at construction from delay_s and the plant timestep dt.
-// Call push() every plant tick: feed in the true angle, get back the delayed one.
+// encoder_delay.hpp
+// Simulates a fixed angle measurement latency using a FIFO queue.
 
 #pragma once
-#include <array>
-#include <cstdint>
+#include <queue>
 
 namespace sim {
 
 class EncoderDelay {
 public:
 
-    // delay_s: total latency to simulate (e.g. cobalt::encoder::delay_s)
-    // dt:      plant timestep (e.g. sim_cfg::DT)
+    // Pre-fills the queue with zeros to the required depth so push() is valid from tick 0.
     EncoderDelay(float delay_s, float dt)
-        : depth(static_cast<int>(delay_s / dt + 0.5f))
-    {}
+    {
+        int depth = static_cast<int>(delay_s / dt + 0.5f);  // number of ticks of latency
+        for (int i = 0; i < depth; ++i)
+            buf.push(0.0f);
+    }
 
     // Feed in the true angle, get back the delayed angle.
     float push(float theta)
     {
-        buf[head] = theta;
-        head = (head + 1) % depth;
-        return buf[head];  // oldest entry = delayed output
+        buf.push(theta);
+        float delayed = buf.front();
+        buf.pop();
+        return delayed;
     }
 
 private:
-    static constexpr int MAX_DEPTH = 512;
-    std::array<float, MAX_DEPTH> buf = {};
-    int head  = 0;
-    int depth = 1;
+    std::queue<float> buf;  // FIFO of angle samples, length = delay in ticks
 };
 
-} // namespace sim
+} 

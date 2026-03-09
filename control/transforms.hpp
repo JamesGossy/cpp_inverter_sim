@@ -1,5 +1,5 @@
 // transforms.hpp
-// Math helpers for FOC: converting between different ways of describing motor currents
+// Math helpers for FOC
 
 #pragma once
 #include <math.h>

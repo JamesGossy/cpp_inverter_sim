@@ -53,8 +53,7 @@ namespace faults {
 
 namespace encoder {
     // Total angle measurement latency: ADC sample + DMA transfer + ISR entry.
-    // Set to 1.5x the inner loop period as a realistic default (75 µs at 20 kHz).
     constexpr float delay_s = 75e-6f;
 }
 
-} // namespace cobalt
+}

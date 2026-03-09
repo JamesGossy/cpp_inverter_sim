@@ -15,24 +15,20 @@ struct Faults {
     bool ambient_overtemp = false;
     bool module_overtemp  = false;
 
+    // Returns true if any fault is active.
     bool any() const {
         return overspeed | overvoltage | overcurrent | motor_overtemp | ambient_overtemp | module_overtemp;
     }
 
+    // Clears all latched faults.
     void clear() {
         overspeed = overvoltage = overcurrent = motor_overtemp = ambient_overtemp = module_overtemp = false;
     }
 };
 
-// speed_rpm and current_a are always available from the sim/sensors.
-// Temp inputs default to 0 so the sim can omit them until thermal modelling is added.
-inline void updateFaults(Faults& f,
-                         float speed_rpm,
-                         float vdc_v,
-                         float current_a,
-                         float motor_temp_c   = 0.0f,
-                         float ambient_temp_c = 0.0f,
-                         float module_temp_c  = 0.0f)
+// Latches any fault whose measured value exceeds the threshold defined in cobalt_params.
+// Temp inputs default to 0.
+inline void updateFaults(Faults& f, float speed_rpm, float vdc_v, float current_a, float motor_temp_c = 0.0f, float ambient_temp_c = 0.0f, float module_temp_c  = 0.0f)
 {
     namespace lim = cobalt::faults;
     if (speed_rpm      > lim::overspeed_rpm)      f.overspeed        = true;
@@ -43,4 +39,4 @@ inline void updateFaults(Faults& f,
     if (module_temp_c  > lim::module_overtemp_c)  f.module_overtemp  = true;
 }
 
-} // namespace cobalt
+} 

@@ -1,7 +1,7 @@
 // current_controller.hpp
 // PI controllers for the d and q axis currents, with back-EMF feedforward.
-// The d-axis is clamped first within the full voltage limit; the q-axis
-// gets whatever headroom is left on the voltage circle.
+// Voltage output is limited by voltage bus favouring the d-axis.
+
 
 #pragma once
 #include <algorithm>
@@ -28,9 +28,7 @@ public:
         pi_q = PIController(p.kp_q, p.ki_q, -p.v_max, p.v_max);
     }
 
-    // voltage_limit is passed per-call so it tracks a live bus voltage measurement.
-    // The d-axis PI runs against the full voltage budget; the q-axis output is
-    // then clamped to the remaining circular headroom.
+    // Voltage output is limited by voltage bus favouring the d-axis.
     void step(float id_ref, float iq_ref, float id, float iq, float omega,  float voltage_limit, float dt, float& vd_out, float& vq_out)
     {
         // Feedforward terms to cancel the motor's back-EMF

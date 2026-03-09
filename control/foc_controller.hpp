@@ -1,15 +1,13 @@
 // foc_controller.hpp
-// Consolidated FOC controller.
 //
-// Owns all control state and exposes two independently-steppable loops that
-// mirror the real scheduling structure of the drive:
-//
+// Owns all control state and exposes two independently-steppable loops.
+// 
 //   stepOuter()  –  field-weakening + speed controller (slow loop, e.g. 2 kHz)
 //                   Reads voltage_mag from the previous inner step to drive FW.
-//                   Writes id_ref, iq_ref consumed by the next inner step.
+//                   Writes id_ref, iq_ref used by the next inner step.
 //
 //   stepInner()  –  Park transform → current controllers → inv-Park →
-//                   inv-Clarke → SVPWM  (fast loop, e.g. 20 kHz)
+//                   inv-Clarke → SVPWM  (loop runs at 20 kHz)
 //                   Writes duty cycles and voltage_mag.
 //
 // The caller is responsible for scheduling (which tick each loop fires on)
@@ -33,25 +31,26 @@ public:
 
     // ── Parameter bundle ──────────────────────────────────────────────────
     struct Params {
-        SpeedController::Params          speed;
+        SpeedController::Params speed;
         FieldWeakeningController::Params fieldWeakening;
-        CurrentController::Params        current;
-        float i_max = 0.0f;  // peak current envelope (A) shared between d and q
+        CurrentController::Params current;
+        float i_max = 0.0f; 
     };
 
     // ── Inputs ────────────────────────────────────────────────────────────
     // Populate from sensors (or simulation) before calling either step.
     struct Measurements {
-        float theta_e = 0.0f;  // electrical angle (rad)
-        float omega_m = 0.0f;  // mechanical speed  (rad/s)
-        float omega_e = 0.0f;  // electrical speed  (rad/s)
-        float i_alpha = 0.0f;  // stator current, stationary α frame (A)
-        float i_beta  = 0.0f;  // stator current, stationary β frame (A)
-        float vdc     = 0.0f;  // DC bus voltage from sensor (V)
+        float theta_e = 0.0f;   // electrical angle (rad)
+        float omega_m = 0.0f;   // mechanical speed  (rad/s)
+        float omega_e = 0.0f;   // electrical speed  (rad/s)
+        float ia = 0.0f;        // phase A current (A)
+        float ib = 0.0f;        // phase B current (A)
+                                // phase C is not measured, it is derived as ic = -(ia + ib)
+        float vdc     = 0.0f;   // DC bus voltage from sensor (V)
     };
 
     struct References {
-        float speed_ref = 0.0f;  // speed setpoint (rad/s)
+        float speed_ref = 0.0f;      // speed setpoint (rad/s)
     };
 
     // ── Outputs ───────────────────────────────────────────────────────────
@@ -67,15 +66,15 @@ public:
         float iq            = 0.0f;  // measured q-axis current (A)
         float vd            = 0.0f;  // d-axis voltage command (V)
         float vq            = 0.0f;  // q-axis voltage command (V)
-        float voltage_mag   = 0.0f;  // |vdq| — fed back into next outer step (V)
-        float v_alpha       = 0.0f;
-        float v_beta        = 0.0f;
-        float va            = 0.0f;
-        float vb            = 0.0f;
-        float vc            = 0.0f;
-        float duty_a        = 0.5f;
-        float duty_b        = 0.5f;
-        float duty_c        = 0.5f;
+        float voltage_mag   = 0.0f;  // |vdq|, fed back into the next outer step (V)
+        float v_alpha       = 0.0f;  // α-axis voltage after inverse Park (V)
+        float v_beta        = 0.0f;  // β-axis voltage after inverse Park (V)
+        float va            = 0.0f;  // phase A voltage command (V)
+        float vb            = 0.0f;  // phase B voltage command (V)
+        float vc            = 0.0f;  // phase C voltage command (V)
+        float duty_a        = 0.5f;  // phase A PWM duty cycle
+        float duty_b        = 0.5f;  // phase B PWM duty cycle
+        float duty_c        = 0.5f;  // phase C PWM duty cycle
     };
 
     struct Output {
@@ -93,39 +92,39 @@ public:
           currentCtrl(p.current) {}
 
     // ── Outer loop step (field-weakening + speed controller) ──────────────
-    // Call at the slow rate (e.g. every 500 µs / 2 kHz).
-    // Returns the updated outer-loop output (also held in state()).
     const OuterLoopOutput& stepOuter(const Measurements& meas, const References& refs, float dt)
     {
         output.outer.voltage_limit = SVPWMModulator::voltage_limit(meas.vdc);
 
         // Field weakening: drive id negative when voltage approaches the limit.
-        // Uses voltage_mag from the previous inner step as the feedback signal.
         output.outer.id_ref = fwCtrl.step(output.inner.voltage_mag, output.outer.voltage_limit, dt);
 
         // Speed controller: produces iq_ref within its fixed current limit.
         output.outer.iq_ref = speedCtrl.step(refs.speed_ref, meas.omega_m, dt);
 
-        // Current circle limit: clamp id_ref first (d-axis has priority as it
-        // controls flux and field weakening), then give iq_ref whatever headroom
-        // remains on the circle  sqrt(id² + iq²) <= i_max.
-        output.outer.id_ref = std::clamp(output.outer.id_ref, -params.i_max, params.i_max);
-        const float iq_budget = std::sqrt(std::max(0.0f, params.i_max * params.i_max - output.outer.id_ref * output.outer.id_ref));
-        output.outer.iq_ref = std::clamp(output.outer.iq_ref, -iq_budget, iq_budget);
+        // Current circle limit: scales down dq vectors by vector magnitude to preserve dq ratio.
+        const float i_mag = std::sqrt(output.outer.id_ref * output.outer.id_ref + output.outer.iq_ref * output.outer.iq_ref);
+        if (i_mag > params.i_max) {
+            const float scale = params.i_max / i_mag;
+            output.outer.id_ref *= scale;
+            output.outer.iq_ref *= scale;
+        }
 
         return output.outer;
     }
 
     // ── Inner loop step (transforms + current control + modulation) ────────
-    // Call at the fast rate (e.g. every 50 µs / 20 kHz).
-    // Reads id_ref / iq_ref written by the most recent stepOuter().
-    // Returns the updated inner-loop output (also held in state()).
     const InnerLoopOutput& stepInner(const Measurements& meas, float dt)
     {
+        // Read dc bus voltage
         output.inner.voltage_limit = SVPWMModulator::voltage_limit(meas.vdc);
 
+        // Clarke: phase A/B → α/β  (C is implicit: ic = -(ia + ib))
+        float i_alpha, i_beta;
+        clarke(meas.ia, meas.ib, i_alpha, i_beta);
+
         // Park: stationary α/β → rotating d/q
-        park(meas.i_alpha, meas.i_beta, meas.theta_e, output.inner.id, output.inner.iq);
+        park(i_alpha, i_beta, meas.theta_e, output.inner.id, output.inner.iq);
 
         // Current controllers (PI + back-EMF feedforward, d-axis favoured)
         currentCtrl.step(output.outer.id_ref, output.outer.iq_ref, output.inner.id, output.inner.iq, meas.omega_e, output.inner.voltage_limit, dt, output.inner.vd, output.inner.vq);
@@ -145,7 +144,7 @@ public:
         return output.inner;
     }
 
-    // Full output snapshot (read-only)
+    // Output
     const Output& state() const { return output; }
 
     void reset() {
@@ -156,12 +155,12 @@ public:
     }
 
 private:
-    Params                   params{};
-    SpeedController          speedCtrl;
+    Params params{};
+    SpeedController speedCtrl;
     FieldWeakeningController fwCtrl;
-    CurrentController        currentCtrl;
-    SVPWMModulator           mod;
-    Output                   output{};
+    CurrentController currentCtrl;
+    SVPWMModulator mod;
+    Output output{};
 };
 
-} // namespace foc
+} 

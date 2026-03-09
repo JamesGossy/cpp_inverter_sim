@@ -13,6 +13,7 @@ public:
         angle = wrap_0_to_2pi(startAngle);
     }
 
+    // Advances the angle by speed (rad/s) * dt.
     void step(float speed, float dt) {
         angle = wrap_0_to_2pi(angle + speed * dt);
     }
